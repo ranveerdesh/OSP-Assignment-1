@@ -2,7 +2,6 @@
 #include <fstream>
 #include <vector>
 #include <string>
-#include <regex>
 #include <algorithm>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -20,14 +19,15 @@ struct FilePair {
     std::string destination;
 };
 
-// Function to extract numeric part from filename for sorting
+// Function to extract numeric part from filename for sorting (without regex)
 int extract_number(const std::string& filename) {
-    std::regex number_regex("(\\d+)");
-    std::smatch match;
-    if (std::regex_search(filename, match, number_regex)) {
-        return std::stoi(match.str());
+    int number = 0;
+    for (char c : filename) {
+        if (isdigit(c)) {
+            number = number * 10 + (c - '0');
+        }
     }
-    return 0; // Return 0 if no number is found
+    return number;
 }
 
 // Thread function to copy files
