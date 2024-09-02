@@ -4,6 +4,7 @@
 #include <vector>
 #include <pthread.h>
 #include <string>
+#include <cstdlib> // For std::strtol
 
 const int MAX_BUFFER_SIZE = 20;  // Maximum capacity of the shared buffer
 
@@ -24,7 +25,7 @@ struct FileHandles {
     std::ofstream* output_stream;
 };
 
-// Function executed by each reader thread to read lines from the input file
+// Function executed by the reader threads to read lines from the input file
 void* reader_thread(void* arg) {
     FileHandles* file_handles = static_cast<FileHandles*>(arg);
     std::string line;
@@ -53,10 +54,9 @@ void* reader_thread(void* arg) {
     return nullptr;
 }
 
-// Function executed by each writer thread to write lines to the output file
+// Function executed by the writer threads to write lines to the output file
 void* writer_thread(void* arg) {
     FileHandles* file_handles = static_cast<FileHandles*>(arg);
-    bool is_first_line = true;
 
     while (true) {
         pthread_mutex_lock(&buffer_mutex);
@@ -77,12 +77,10 @@ void* writer_thread(void* arg) {
         pthread_mutex_unlock(&buffer_mutex);
 
         // Write the line to the output file
-        if (is_first_line) {
-            *file_handles->output_stream << line;
-            is_first_line = false;
-        } else {
-            *file_handles->output_stream << '\n' << line;
+        if (file_handles->output_stream->tellp() > 0) {
+            *file_handles->output_stream << '\n';
         }
+        *file_handles->output_stream << line;
     }
 }
 
@@ -92,9 +90,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    int thread_count = std::stoi(argv[1]);
-    if (thread_count < 2 || thread_count > 10) {
-        std::cerr << "Error: thread_count must be between 2 and 10" << std::endl;
+    char* endptr;
+    int thread_count = std::strtol(argv[1], &endptr, 10);
+    if (*endptr != '\0' || thread_count < 2 || thread_count > 10) {
+        std::cerr << "Error: thread_count must be a number between 2 and 10" << std::endl;
         return 1;
     }
 
@@ -111,8 +110,10 @@ int main(int argc, char* argv[]) {
     }
 
     FileHandles file_handles = { &input_file, &output_file };
-    std::vector<pthread_t> readers(thread_count);
-    std::vector<pthread_t> writers(thread_count);
+    std::vector<pthread_t> readers;
+    std::vector<pthread_t> writers;
+    readers.resize(thread_count);
+    writers.resize(thread_count);
 
     // Create the reader threads
     for (int i = 0; i < thread_count; ++i) {
