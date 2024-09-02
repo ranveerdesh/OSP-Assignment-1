@@ -10,105 +10,116 @@
 
 namespace fs = std::filesystem;
 
-// Mutex to protect shared resources (if needed)
-pthread_mutex_t mutex;
+// Mutex to protect shared resources, ensuring thread safety
+pthread_mutex_t file_copy_mutex;
 
-// Helper function to extract the numeric part of the filename for sorting
-int extract_number(const fs::path& path) {
-    std::string filename = path.filename().string();
-    std::regex number_regex("(\\d+)");
+// Helper function to extract numeric values from filenames for sorting
+// This function uses regular expressions to find the first sequence of digits in the filename
+int get_numeric_part(const fs::path& file_path) {
+    std::string filename = file_path.filename().string();
+    std::regex number_regex("(\\d+)"); // Regex to match one or more digits
     std::smatch match;
     if (std::regex_search(filename, match, number_regex)) {
-        return std::stoi(match.str(1));
+        return std::stoi(match.str(1)); // Convert the first matched group to an integer
     }
-    return 0;
+    return 0; // Return 0 if no numeric part is found
 }
 
-void* copy_file(void* args) {
-    // Extract source and destination paths from arguments
-    std::pair<fs::path, fs::path>* paths = static_cast<std::pair<fs::path, fs::path>*>(args);
-    const fs::path& source = paths->first;
-    const fs::path& destination = paths->second;
+// Function executed by each thread to copy a file
+// This function takes a pair of paths as arguments: the source file and the destination file
+void* copy_file_thread(void* args) {
+    // Extract the source and destination paths from the arguments
+    auto* file_paths = static_cast<std::pair<fs::path, fs::path>*>(args);
+    const fs::path& source_file = file_paths->first;
+    const fs::path& destination_file = file_paths->second;
 
     try {
-        fs::copy_file(source, destination, fs::copy_options::overwrite_existing);
-        std::cout << "Copied " << source.filename() << " to " << destination << std::endl;
+        // Perform the file copy operation, overwriting the destination file if it exists
+        fs::copy_file(source_file, destination_file, fs::copy_options::overwrite_existing);
+        std::cout << "Copied " << source_file.filename() << " to " << destination_file << std::endl;
     } catch (const fs::filesystem_error& e) {
-        std::cerr << "Error copying " << source << " to " << destination << ": " << e.what() << std::endl;
+        // Handle any errors that occur during the file copy operation
+        std::cerr << "Failed to copy " << source_file << " to " << destination_file << ": " << e.what() << std::endl;
     }
 
     return nullptr;
 }
 
 int main(int argc, char* argv[]) {
+    // Ensure the correct number of arguments are provided
     if (argc != 4) {
-        std::cerr << "Usage: " << argv[0] << " <n> <source_dir> <destination_dir>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <number_of_files> <source_directory> <destination_directory>" << std::endl;
         return 1;
     }
 
-    int n = std::stoi(argv[1]);
-    if (n > 10) {
-        std::cerr << "Error: n should be less than or equal to 10" << std::endl;
+    // Parse the number of files to copy from the command line arguments
+    int file_count = std::stoi(argv[1]);
+    if (file_count > 10) {
+        std::cerr << "Error: The number of files to copy should not exceed 10." << std::endl;
         return 1;
     }
 
-    fs::path source_dir = argv[2];
-    fs::path destination_dir = argv[3];
+    fs::path source_directory = argv[2];
+    fs::path destination_directory = argv[3];
 
-    if (!fs::exists(source_dir) || !fs::is_directory(source_dir)) {
+    // Verify that the source directory exists and is a valid directory
+    if (!fs::exists(source_directory) || !fs::is_directory(source_directory)) {
         std::cerr << "Error: Source directory does not exist or is not a directory." << std::endl;
         return 1;
     }
 
-    if (!fs::exists(destination_dir)) {
+    // If the destination directory does not exist, create it
+    if (!fs::exists(destination_directory)) {
         std::cerr << "Destination directory does not exist. Creating it..." << std::endl;
-        fs::create_directory(destination_dir);
+        fs::create_directory(destination_directory);
     }
 
-    // Initialize the mutex
-    pthread_mutex_init(&mutex, nullptr);
+    // Initialize the mutex to synchronize access to shared resources
+    pthread_mutex_init(&file_copy_mutex, nullptr);
 
-    // Get all file paths in the source directory and sort them numerically
-    std::vector<fs::path> files;
-    for (const auto& entry : fs::directory_iterator(source_dir)) {
+    // Gather all file paths from the source directory
+    std::vector<fs::path> source_files;
+    for (const auto& entry : fs::directory_iterator(source_directory)) {
         if (fs::is_regular_file(entry.path())) {
-            files.push_back(entry.path());
+            source_files.push_back(entry.path());
         }
     }
 
-    // Sort files numerically based on extracted numbers from the filename
-    std::sort(files.begin(), files.end(), [](const fs::path& a, const fs::path& b) {
-        return extract_number(a) < extract_number(b);
+    // Sort the files numerically based on numbers extracted from filenames
+    std::sort(source_files.begin(), source_files.end(), [](const fs::path& a, const fs::path& b) {
+        return get_numeric_part(a) < get_numeric_part(b);
     });
 
-    // Limit to n files
-    if (files.size() > static_cast<size_t>(n)) {
-        files.resize(n);
+    // Limit the number of files to copy to the specified number
+    if (source_files.size() > static_cast<size_t>(file_count)) {
+        source_files.resize(file_count);
     }
 
-    std::vector<pthread_t> threads(files.size());
-    std::vector<std::pair<fs::path, fs::path>> paths(files.size());
+    // Create threads to copy each file in parallel
+    std::vector<pthread_t> copy_threads(source_files.size());
+    std::vector<std::pair<fs::path, fs::path>> file_paths(source_files.size());
 
-    for (size_t i = 0; i < files.size(); ++i) {
-        fs::path source_file = files[i];
-        fs::path destination_file = destination_dir / source_file.filename();
-        paths[i] = std::make_pair(source_file, destination_file);
+    for (size_t i = 0; i < source_files.size(); ++i) {
+        fs::path source_file = source_files[i];
+        fs::path destination_file = destination_directory / source_file.filename();
+        file_paths[i] = std::make_pair(source_file, destination_file);
 
-        int result = pthread_create(&threads[i], nullptr, copy_file, &paths[i]);
+        // Create a new thread for each file copy operation
+        int result = pthread_create(&copy_threads[i], nullptr, copy_file_thread, &file_paths[i]);
         if (result != 0) {
-            std::cerr << "Error creating thread " << i << ": " << std::strerror(result) << std::endl;
+            std::cerr << "Failed to create thread " << i << ": " << std::strerror(result) << std::endl;
             return 1;
         }
     }
 
-    // Wait for all threads to complete
-    for (size_t i = 0; i < files.size(); i++) {
-        pthread_join(threads[i], nullptr);
+    // Wait for all threads to complete their file copy operations
+    for (size_t i = 0; i < source_files.size(); i++) {
+        pthread_join(copy_threads[i], nullptr);
     }
 
-    // Destroy the mutex
-    pthread_mutex_destroy(&mutex);
+    // Destroy the mutex after all threads have finished
+    pthread_mutex_destroy(&file_copy_mutex);
 
-    std::cout << "All files copied successfully." << std::endl;
+    std::cout << "All files have been copied successfully." << std::endl;
     return 0;
 }
