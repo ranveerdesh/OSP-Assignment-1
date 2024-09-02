@@ -1,6 +1,6 @@
 # Compiler
 CXX = g++
-CXXFLAGS = -std=c++1y -Wall -Werror -Ipthread
+CXXFLAGS = -std=c++1y -Wall -Werror -pthread
 
 # Targets
 TARGETS = mmcopier mscopier
